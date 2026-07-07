@@ -120,6 +120,38 @@ The build process is primarily handled through GitHub Actions, with the reposito
 
 For detailed manual build instructions, please see: **[docs/manual_instructions.md](docs/manual_instructions.md)**
 
+## 💻 Local Build Script (Windows)
+
+`scripts/Build-LlamaCppRocm.ps1` reproduces the CI pipeline locally on a Windows
+machine — it downloads the latest TheRock ROCm 7 nightly, clones llama.cpp, builds
+with HIP, and stages a self-contained folder next to the binaries. Defaults to
+**gfx1151**; every stage is skippable for fast re-runs.
+
+```powershell
+# Default: gfx1151, latest ROCm + latest llama.cpp
+.\scripts\Build-LlamaCppRocm.ps1
+
+# Pin specific versions
+.\scripts\Build-LlamaCppRocm.ps1 -GpuTarget gfx1151 -RocmVersion 7.13.0a20260318
+
+# Fast iteration: re-run only configure/build/stage (ROCm + llama.cpp already present)
+.\scripts\Build-LlamaCppRocm.ps1 -SkipDeps -SkipRocmDownload -SkipClone
+
+# Fresh full rebuild
+.\scripts\Build-LlamaCppRocm.ps1 -Clean
+```
+
+Output lands in `build-output\<GpuTarget>\` — smoketest from there:
+```powershell
+cd build-output\gfx1151
+.\llama-server.exe -m <your-model.gguf> -ngl 99
+```
+
+> **⚠️ VS 2022 required:** Upstream pins to VS 2022 (MSVC 14.4x). VS 2026
+> (MSVC 14.51) breaks the HIP build via a `<cmath>` constexpr collision
+> ([llama.cpp#22570](https://github.com/ggerganov/llama.cpp/issues/22570)).
+> The script warns if VS 2026 is detected.
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
