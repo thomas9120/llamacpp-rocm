@@ -58,6 +58,11 @@
 .PARAMETER SkipStage
     Skip copying runtime DLLs to the staging directory.
 
+.PARAMETER EnableHipVmm
+    Build with HIP VMM enabled by passing -DGGML_HIP_NO_VMM=OFF to CMake.
+    This may help RDNA 4 / memory-pressure cases, but is opt-in because some
+    gfx1151 setups report better stability with llama.cpp's default NO_VMM path.
+
 .PARAMETER Clean
     Remove -SourceDir, -BuildDir, and -RocmDir before building (fresh build).
 
@@ -72,6 +77,10 @@
 .EXAMPLE
     .\scripts\Build-LlamaCppRocm.ps1 -SkipRocmDownload -SkipClone -SkipDeps
     Re-run just the configure/build/stage stages (fastest iteration loop).
+
+.EXAMPLE
+    .\scripts\Build-LlamaCppRocm.ps1 -EnableHipVmm
+    Builds an opt-in HIP VMM variant in separate build/output folders.
 
 .NOTES
     * Requires Visual Studio 2022 Build Tools (VC++, ATL, Windows 11 SDK).
@@ -91,7 +100,7 @@ param(
     [string]$LlamacppVersion = 'latest',
 
     [string]$RocmDir     = 'C:\opt\rocm',
-    [string]$SourceDir   = (Join-Path $PSScriptRoot 'llama.cpp'),
+    [string]$SourceDir   = $null,
     [string]$BuildDir    = $null,                 # defaults to SourceDir\build
     [string]$StagingDir  = $null,                 # defaults to .\build-output\<GpuTarget>
 
@@ -100,13 +109,17 @@ param(
     [switch]$SkipClone,
     [switch]$SkipBuild,
     [switch]$SkipStage,
+    [switch]$EnableHipVmm,
     [switch]$Clean
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $BuildDir)   { $BuildDir   = Join-Path $SourceDir 'build' }
-if (-not $StagingDir) { $StagingDir = Join-Path (Join-Path $PSScriptRoot 'build-output') $GpuTarget }
+$scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$buildVariantSuffix = if ($EnableHipVmm) { '-hip-vmm' } else { '' }
+if (-not $SourceDir) { $SourceDir = Join-Path $scriptRoot 'llama.cpp' }
+if (-not $BuildDir)   { $BuildDir   = Join-Path $SourceDir "build$buildVariantSuffix" }
+if (-not $StagingDir) { $StagingDir = Join-Path (Join-Path $scriptRoot 'build-output') "$GpuTarget$buildVariantSuffix" }
 
 # ----------------------------------------------------------------------------- #
 # Helpers
@@ -373,9 +386,13 @@ if (-not $SkipClone) {
 # ----------------------------------------------------------------------------- #
 
 $mappedTarget = Resolve-MappedTarget $GpuTarget
+$hipVmmCmakeLine = if ($EnableHipVmm) { "  -DGGML_HIP_NO_VMM=OFF ^`r`n" } else { "" }
 
 if (-not $SkipBuild) {
     Write-Step "Stage 4/5 - configure + build (GPU_TARGETS=$mappedTarget)"
+    if ($EnableHipVmm) {
+        Write-Warn "HIP VMM enabled: passing -DGGML_HIP_NO_VMM=OFF to CMake."
+    }
 
     # Clean prior build dir so re-configures don't pick up stale cache.
     if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
@@ -417,7 +434,7 @@ cmake `"$SourceDir`" -G Ninja ^
   -DBUILD_SHARED_LIBS=ON ^
   -DLLAMA_BUILD_TESTS=OFF ^
   -DGGML_HIP=ON ^
-  -DGGML_OPENMP=OFF ^
+$hipVmmCmakeLine  -DGGML_OPENMP=OFF ^
   -DGGML_CUDA_FORCE_CUBLAS=OFF ^
   -DGGML_HIP_ROCWMMA_FATTN=OFF ^
   -DLLAMA_CURL=OFF ^

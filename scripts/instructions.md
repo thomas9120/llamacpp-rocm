@@ -21,6 +21,14 @@ For a faster rebuild when ROCm and `llama.cpp` are already present:
 .\scripts\Build-LlamaCppRocm.ps1 -SkipRocmDownload -SkipClone
 ```
 
+To test the opt-in HIP VMM allocator build suggested in upstream PR #94:
+
+```powershell
+.\scripts\Build-LlamaCppRocm-HipVmm.ps1
+```
+
+That variant passes `-DGGML_HIP_NO_VMM=OFF` and writes to separate `build-hip-vmm` / `build-output\<target>-hip-vmm` folders.
+
 After building, run from the output folder:
 
 ```powershell
