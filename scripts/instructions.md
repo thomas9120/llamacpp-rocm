@@ -5,6 +5,9 @@ Run this from the repo root:
 ```powershell
 .\scripts\Build-LlamaCppRocm.ps1
 ```
+.\scripts\Build-LlamaCppRocm.ps1 -GpuTarget gfx1151
+
+
 
 This updates the local `llama.cpp` checkout, auto-detects the latest ROCm nightly, builds for `gfx1151`, and stages the portable output here:
 
