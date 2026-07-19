@@ -26,11 +26,19 @@ param(
     [string]$BuildDir    = $null,
     [string]$StagingDir  = $null,
 
+    [ValidateSet('auto','on','off')]
+    [string]$StrixHaloFaFix = 'auto',
+
+    [ValidateRange(0, 256)]
+    [int]$BuildJobs = 0,
+
     [switch]$SkipDeps,
     [switch]$SkipRocmDownload,
     [switch]$SkipClone,
     [switch]$SkipBuild,
     [switch]$SkipStage,
+    [switch]$BuildTests,
+    [switch]$EnableCcache,
     [switch]$Clean
 )
 
@@ -43,6 +51,8 @@ $paramsToForward = @{
     LlamacppVersion = $LlamacppVersion
     RocmDir         = $RocmDir
     SourceDir       = $SourceDir
+    StrixHaloFaFix  = $StrixHaloFaFix
+    BuildJobs       = $BuildJobs
     EnableHipVmm    = $true
 }
 
@@ -53,6 +63,8 @@ if ($SkipRocmDownload) { $paramsToForward.SkipRocmDownload = $true }
 if ($SkipClone) { $paramsToForward.SkipClone = $true }
 if ($SkipBuild) { $paramsToForward.SkipBuild = $true }
 if ($SkipStage) { $paramsToForward.SkipStage = $true }
+if ($BuildTests) { $paramsToForward.BuildTests = $true }
+if ($EnableCcache) { $paramsToForward.EnableCcache = $true }
 if ($Clean) { $paramsToForward.Clean = $true }
 
 & (Join-Path $scriptRoot 'Build-LlamaCppRocm.ps1') @paramsToForward

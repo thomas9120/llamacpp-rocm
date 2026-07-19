@@ -43,6 +43,21 @@
     Final self-contained output directory. Default: .\build-output\<GpuTarget>.
     All llama-*.exe binaries + ROCm runtime DLLs + kernel catalogs land here.
 
+.PARAMETER StrixHaloFaFix
+    Quantized-KV flash-attention patch mode: auto, on, or off. Default: auto,
+    which applies the patch only to gfx1151 builds.
+
+.PARAMETER BuildTests
+    Build llama.cpp test binaries, including test-backend-ops.
+
+.PARAMETER BuildJobs
+    Maximum parallel build jobs. Default: 0, which caps the local HIP build at
+    8 jobs to avoid compiler oversubscription.
+
+.PARAMETER EnableCcache
+    Enable compiler caching. Disabled by default because clean Windows HIP builds
+    can stall in the ccache frontend shipped with Strawberry Perl.
+
 .PARAMETER SkipDeps
     Skip the dependency check/install stage.
 
@@ -104,11 +119,19 @@ param(
     [string]$BuildDir    = $null,                 # defaults to SourceDir\build
     [string]$StagingDir  = $null,                 # defaults to .\build-output\<GpuTarget>
 
+    [ValidateSet('auto','on','off')]
+    [string]$StrixHaloFaFix = 'auto',
+
+    [ValidateRange(0, 256)]
+    [int]$BuildJobs = 0,
+
     [switch]$SkipDeps,
     [switch]$SkipRocmDownload,
     [switch]$SkipClone,
     [switch]$SkipBuild,
     [switch]$SkipStage,
+    [switch]$BuildTests,
+    [switch]$EnableCcache,
     [switch]$EnableHipVmm,
     [switch]$Clean
 )
@@ -120,6 +143,23 @@ $buildVariantSuffix = if ($EnableHipVmm) { '-hip-vmm' } else { '' }
 if (-not $SourceDir) { $SourceDir = Join-Path $scriptRoot 'llama.cpp' }
 if (-not $BuildDir)   { $BuildDir   = Join-Path $SourceDir "build$buildVariantSuffix" }
 if (-not $StagingDir) { $StagingDir = Join-Path (Join-Path $scriptRoot 'build-output') "$GpuTarget$buildVariantSuffix" }
+
+$applyStrixHaloFaFix = switch ($StrixHaloFaFix) {
+    'on'      { $true }
+    'off'     { $false }
+    default   { $GpuTarget -eq 'gfx1151' }
+}
+
+$effectiveBuildJobs = if ($BuildJobs -gt 0) {
+    $BuildJobs
+} else {
+    [Math]::Max(1, [Math]::Min([Environment]::ProcessorCount, 8))
+}
+$llamacppPatchset = 'none'
+$patchScript = Join-Path $scriptRoot 'Apply-StrixHaloFaPatch.ps1'
+$patchsetFile = Join-Path (Join-Path (Split-Path -Parent $scriptRoot) 'patches\strix-halo-fa') 'PATCHSET'
+$strixHaloPatchset = (Get-Content -LiteralPath $patchsetFile -Raw).Trim()
+$patchsetMarker = Join-Path $SourceDir '.llamacpp-rocm-build.patchset'
 
 # ----------------------------------------------------------------------------- #
 # Helpers
@@ -381,15 +421,35 @@ if (-not $SkipClone) {
     Write-Step "Stage 3/5 - SKIPPED (using existing llama.cpp at $SourceDir)"
 }
 
+if ($applyStrixHaloFaFix) {
+    Write-Step "Stage 3b/5 - apply gfx1151 quantized-KV flash-attention patch"
+    & $patchScript -SourceDir $SourceDir
+    $llamacppPatchset = $strixHaloPatchset
+} else {
+    $previousPatchset = if ($SkipClone -and (Test-Path -LiteralPath $patchsetMarker -PathType Leaf)) {
+        (Get-Content -LiteralPath $patchsetMarker -Raw).Trim()
+    } else {
+        'none'
+    }
+    if ($previousPatchset -eq $strixHaloPatchset) {
+        Write-Step "Stage 3b/5 - remove gfx1151 quantized-KV flash-attention patch"
+        & $patchScript -SourceDir $SourceDir -Remove
+    }
+    Write-Host "Strix Halo flash-attention patch disabled (mode=$StrixHaloFaFix, target=$GpuTarget)."
+}
+Set-Content -Path $patchsetMarker -Value $llamacppPatchset -NoNewline
+
 # ----------------------------------------------------------------------------- #
 # Stage 4 - configure + build (CMake + Ninja under the VS dev shell)
 # ----------------------------------------------------------------------------- #
 
 $mappedTarget = Resolve-MappedTarget $GpuTarget
 $hipVmmCmakeLine = if ($EnableHipVmm) { "  -DGGML_HIP_NO_VMM=OFF ^`r`n" } else { "" }
+$buildTestsCmakeValue = if ($BuildTests) { 'ON' } else { 'OFF' }
+$ccacheCmakeValue = if ($EnableCcache) { 'ON' } else { 'OFF' }
 
 if (-not $SkipBuild) {
-    Write-Step "Stage 4/5 - configure + build (GPU_TARGETS=$mappedTarget)"
+    Write-Step "Stage 4/5 - configure + build (GPU_TARGETS=$mappedTarget, jobs=$effectiveBuildJobs)"
     if ($EnableHipVmm) {
         Write-Warn "HIP VMM enabled: passing -DGGML_HIP_NO_VMM=OFF to CMake."
     }
@@ -432,7 +492,8 @@ cmake `"$SourceDir`" -G Ninja ^
   -DCMAKE_BUILD_TYPE=Release ^
   -DGPU_TARGETS=`"$mappedTarget`" ^
   -DBUILD_SHARED_LIBS=ON ^
-  -DLLAMA_BUILD_TESTS=OFF ^
+  -DLLAMA_BUILD_TESTS=$buildTestsCmakeValue ^
+  -DGGML_CCACHE=$ccacheCmakeValue ^
   -DGGML_HIP=ON ^
 $hipVmmCmakeLine  -DGGML_OPENMP=OFF ^
   -DGGML_CUDA_FORCE_CUBLAS=OFF ^
@@ -442,7 +503,7 @@ $hipVmmCmakeLine  -DGGML_OPENMP=OFF ^
   -DGGML_STATIC=OFF ^
   -DCMAKE_SYSTEM_NAME=Windows
 @if errorlevel 1 exit /b 1
-cmake --build . -j %NUMBER_OF_PROCESSORS%
+cmake --build . -j $effectiveBuildJobs
 @exit /b %errorlevel%
 "@ | Set-Content -Path $bat -Encoding ASCII
 
@@ -478,6 +539,7 @@ if (-not $SkipStage) {
     # --- llama.cpp binaries + built DLLs -------------------------------------- #
     Write-Host "Copying llama.cpp build output..."
     Copy-Item -Path (Join-Path $builtBin '*') -Destination $StagingDir -Recurse -Force
+    Set-Content -Path (Join-Path $StagingDir 'llamacpp-rocm-patchset.txt') -Value $llamacppPatchset
 
     # --- ROCm core runtime DLLs ---------------------------------------------- #
     # Matches the upstream "Copy ROCm core DLLs" workflow step.

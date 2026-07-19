@@ -65,6 +65,35 @@ runs:
       run: |
         # Add the llama-binaries directory to LD_LIBRARY_PATH
         echo "LD_LIBRARY_PATH=$(pwd)/llama-binaries:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+    - name: Test quantized-KV flash attention (Windows gfx1151)
+      if: inputs.os_type == 'Windows' && inputs.gfx_target == 'gfx1151'
+      shell: powershell
+      run: |
+        $testPath = "llama-binaries\test-backend-ops.exe"
+        if (-not (Test-Path $testPath)) {
+          Write-Error "test-backend-ops.exe not found at: $testPath"
+          exit 1
+        }
+
+        & $testPath -o FLASH_ATTN_EXT
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "FLASH_ATTN_EXT backend tests failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
+        }
+
+    - name: Test quantized-KV flash attention (Linux gfx1151)
+      if: inputs.os_type == 'Linux' && inputs.gfx_target == 'gfx1151'
+      shell: bash
+      run: |
+        test_path="./llama-binaries/test-backend-ops"
+        if [ ! -f "$test_path" ]; then
+          echo "test-backend-ops not found at: $test_path"
+          exit 1
+        fi
+
+        chmod +x "$test_path"
+        "$test_path" -o FLASH_ATTN_EXT
         
     - name: Run llama-cli test (Windows)
       if: inputs.os_type == 'Windows'

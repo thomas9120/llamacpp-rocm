@@ -262,11 +262,20 @@ jobs:
         # Get commit hash (5 digits) and store it as environment variable
         $commitHash = git rev-parse --short=5 HEAD
         echo "LLAMACPP_COMMIT_HASH=$commitHash" >> $env:GITHUB_ENV
+        echo "LLAMACPP_PATCHSET=none" >> $env:GITHUB_ENV
         Write-Host "llama.cpp commit hash (5 digits): $commitHash"
         
         # Show current commit info
         Write-Host "Current llama.cpp commit:"
         git log --oneline -1
+
+    - name: Apply Strix Halo quantized-KV flash-attention patch
+      if: matrix.gfx_target == 'gfx1151'
+      shell: pwsh
+      run: |
+        & .\scripts\Apply-StrixHaloFaPatch.ps1 -SourceDir .\llama.cpp
+        $patchset = (Get-Content .\patches\strix-halo-fa\PATCHSET -Raw).Trim()
+        echo "LLAMACPP_PATCHSET=$patchset" >> $env:GITHUB_ENV
 
     - name: Build Llama.cpp + ROCm
       shell: cmd
@@ -290,6 +299,10 @@ jobs:
           set "mapped_target=%current_target%"
         )
         echo Mapped target: %mapped_target%
+
+        set "build_jobs=%NUMBER_OF_PROCESSORS%"
+        if %NUMBER_OF_PROCESSORS% GTR 8 set "build_jobs=8"
+        echo Build jobs: %build_jobs%
 
         REM Set up environment variables and PATH
         set HIP_PATH=C:\opt\rocm
@@ -316,6 +329,7 @@ jobs:
           -DGPU_TARGETS="%mapped_target%" ^
           -DBUILD_SHARED_LIBS=ON ^
           -DLLAMA_BUILD_TESTS=OFF ^
+          -DGGML_CCACHE=OFF ^
           -DGGML_HIP=ON ^
           -DGGML_OPENMP=OFF ^
           -DGGML_CUDA_FORCE_CUBLAS=OFF ^
@@ -327,13 +341,23 @@ jobs:
           -DCMAKE_SYSTEM_NAME=Windows
 
         REM Build the project
-        cmake --build . -j %NUMBER_OF_PROCESSORS%
+        cmake --build . -j %build_jobs%
+        if errorlevel 1 exit /b 1
+
+        REM Build only the backend operation test needed by the gfx1151 validation job.
+        if "%current_target%"=="gfx1151" (
+          cmake .. -DLLAMA_BUILD_TESTS=ON
+          if errorlevel 1 exit /b 1
+          cmake --build . --target test-backend-ops -j %build_jobs%
+          if errorlevel 1 exit /b 1
+        )
         
     - name: Copy ROCm core DLLs to build directory
       run: |
         $rocmVersion = if ($env:DETECTED_ROCM_VERSION) { $env:DETECTED_ROCM_VERSION } else { $env:ROCM_VERSION }
         $buildBinPath = "llama.cpp\build\bin"
         $rocmBinPath = "C:\opt\rocm\bin"
+        Set-Content -Path (Join-Path $buildBinPath 'llamacpp-rocm-patchset.txt') -Value $env:LLAMACPP_PATCHSET
         
         Write-Host "Copying ROCm core DLL files to build directory..."
         Write-Host "Source: $rocmBinPath"
@@ -442,6 +466,7 @@ jobs:
         - **GPU Target**: ${{ matrix.gfx_target }}
         - **ROCm Version**: ${{ env.DETECTED_ROCM_VERSION || env.ROCM_VERSION }}
         - **llama.cpp Commit Hash**: ${{ env.LLAMACPP_COMMIT_HASH }}
+        - **llama.cpp Patch Set**: ${{ env.LLAMACPP_PATCHSET }}
         - **Build Type**: Release
         - **Platform**: Windows
         
@@ -650,11 +675,20 @@ jobs:
         # Get commit hash (5 digits) and store it as environment variable
         commit_hash=$(git rev-parse --short=5 HEAD)
         echo "LLAMACPP_COMMIT_HASH=$commit_hash" >> $GITHUB_ENV
+        echo "LLAMACPP_PATCHSET=none" >> $GITHUB_ENV
         echo "llama.cpp commit hash (5 digits): $commit_hash"
         
         # Show current commit info
         echo "Current llama.cpp commit:"
         git log --oneline -1
+
+    - name: Apply Strix Halo quantized-KV flash-attention patch
+      if: matrix.gfx_target == 'gfx1151'
+      shell: pwsh
+      run: |
+        & ./scripts/Apply-StrixHaloFaPatch.ps1 -SourceDir ./llama.cpp
+        $patchset = (Get-Content ./patches/strix-halo-fa/PATCHSET -Raw).Trim()
+        echo "LLAMACPP_PATCHSET=$patchset" >> $env:GITHUB_ENV
 
         
     - name: Build Llama.cpp + ROCm
@@ -678,6 +712,12 @@ jobs:
         fi
         echo "Mapped target: $mapped_target"
 
+        build_jobs=$(nproc)
+        if [ "$build_jobs" -gt 8 ]; then
+          build_jobs=8
+        fi
+        echo "Build jobs: $build_jobs"
+
         # Create build directory
         cd llama.cpp
         mkdir build
@@ -693,6 +733,7 @@ jobs:
           -DGPU_TARGETS="$mapped_target" \
           -DBUILD_SHARED_LIBS=ON \
           -DLLAMA_BUILD_TESTS=OFF \
+          -DGGML_CCACHE=OFF \
           -DGGML_HIP=ON \
           -DGGML_OPENMP=OFF \
           -DGGML_CUDA_FORCE_CUBLAS=OFF \
@@ -704,7 +745,13 @@ jobs:
           -DCMAKE_SYSTEM_NAME=Linux
 
         # Build the project
-        cmake --build . -j $(nproc)
+        cmake --build . -j "$build_jobs"
+
+        # Build only the backend operation test needed by the gfx1151 validation job.
+        if [ "$current_target" = "gfx1151" ]; then
+          cmake .. -DLLAMA_BUILD_TESTS=ON
+          cmake --build . --target test-backend-ops -j "$build_jobs"
+        fi
         
     - name: Copy ROCm core libs to build directory
       run: |
@@ -773,6 +820,7 @@ jobs:
         cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_bz2.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_bz2.so* not found"
 
         echo "Finished copying required ROCm libraries"
+        printf '%s\n' "$LLAMACPP_PATCHSET" > "$build_bin_path/llamacpp-rocm-patchset.txt"
 
     - name: Set RPATH for portable distribution
       run: |
@@ -822,6 +870,7 @@ jobs:
         - **GPU Target**: ${{ matrix.gfx_target }}
         - **ROCm Version**: ${{ env.DETECTED_ROCM_VERSION || env.ROCM_VERSION }}
         - **llama.cpp Commit Hash**: ${{ env.LLAMACPP_COMMIT_HASH }}
+        - **llama.cpp Patch Set**: ${{ env.LLAMACPP_PATCHSET }}
         - **Build Type**: Release
         - **Platform**: Ubuntu
         

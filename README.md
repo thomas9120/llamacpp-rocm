@@ -125,7 +125,9 @@ For detailed manual build instructions, please see: **[docs/manual_instructions.
 `scripts/Build-LlamaCppRocm.ps1` reproduces the CI pipeline locally on a Windows
 machine — it downloads the latest TheRock ROCm 7 nightly, clones llama.cpp, builds
 with HIP, and stages a self-contained folder next to the binaries. Defaults to
-**gfx1151**; every stage is skippable for fast re-runs.
+**gfx1151**; every stage is skippable for fast re-runs. gfx1151 builds also apply
+the vendored [`strix-halo-fa-v1`](patches/strix-halo-fa/README.md) ROCm patch set,
+which removes redundant quantized-KV dequantization during long-context decode.
 
 ```powershell
 # Default: gfx1151, latest ROCm + latest llama.cpp
@@ -136,6 +138,12 @@ with HIP, and stages a self-contained folder next to the binaries. Defaults to
 
 # Fast iteration: re-run only configure/build/stage (ROCm + llama.cpp already present)
 .\scripts\Build-LlamaCppRocm.ps1 -SkipDeps -SkipRocmDownload -SkipClone
+
+# Build the backend tests with four parallel compiler jobs
+.\scripts\Build-LlamaCppRocm.ps1 -BuildTests -BuildJobs 4
+
+# Produce an unpatched gfx1151 baseline for comparison
+.\scripts\Build-LlamaCppRocm.ps1 -StrixHaloFaFix off
 
 # Fresh full rebuild
 .\scripts\Build-LlamaCppRocm.ps1 -Clean
