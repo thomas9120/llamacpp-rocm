@@ -286,8 +286,12 @@ if (-not $SkipRocmDownload) {
         }
         $allFiles  = $filesMatch.Groups[1].Value | ConvertFrom-Json
         $prefix    = "therock-dist-windows-$tarballTarget-"
+        # Anchor the match so the version comes immediately after the prefix.
+        # This excludes variants like "...-tests-<version>.tar.gz" that TheRock
+        # also publishes and share the same prefix/date.
+        $versionPattern = "^$([regex]::Escape($prefix))\d+\.\d+\.\d+(a|rc)\d+\.tar\.gz$"
         $latest    = $allFiles |
-            Where-Object { $_.name -like "$prefix*" -and $_.name -match '\d{8}\.tar\.gz$' } |
+            Where-Object { $_.name -match $versionPattern } |
             Sort-Object { [regex]::Match($_.name, '(\d{8})\.tar\.gz$').Groups[1].Value } |
             Select-Object -Last 1
         if (-not $latest) {
