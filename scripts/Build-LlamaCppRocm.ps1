@@ -479,7 +479,8 @@ if (-not $SkipStage) {
         'rocsolver.dll',
         'hipblaslt.dll',
         'libhipblaslt.dll',
-        'hipblas.dll'
+        'hipblas.dll',
+        'origami.dll'  # new ROCm runtime dep; upstream PR lemonade-sdk/llamacpp-rocm#126
     )
     foreach ($pattern in $dllPatterns) {
         $matching = Get-ChildItem -Path $rocmBinPath -Filter $pattern -ErrorAction SilentlyContinue
